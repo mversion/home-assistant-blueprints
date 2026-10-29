@@ -13,6 +13,10 @@ After the quick attempts it can keep trying slowly (default once every 60 minute
 the internet stays down. It also turns the plug on when Home Assistant starts (can be switched off), so the
 modem is never left off if Home Assistant restarted in the middle of a power cycle.
 
+When the internet comes back after an outage it acted on, it can send an **Internet restored** notification
+with how long the outage lasted to one or more phones (Home Assistant Companion app, for example
+`notify.mobile_app_karels_phone`). Leave the setting empty for no notifications.
+
 **Needs:**
 
 - Home Assistant 2024.10 or later.

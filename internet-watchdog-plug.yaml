@@ -89,6 +89,17 @@ blueprint:
       default: true
       selector:
         boolean: {}
+    notify_services:
+      name: Notify when the internet is back
+      description: >
+        Notification actions to send an "internet restored" message to after an outage the
+        watchdog acted on, for example notify.mobile_app_karels_phone (needs the Home Assistant
+        Companion app on the phone). Find the name under Developer tools > Actions by searching
+        "mobile_app". Add one per phone, or leave empty for no notifications.
+      default: []
+      selector:
+        text:
+          multiple: true
 
 mode: single
 max_exceeded: silent
@@ -101,6 +112,7 @@ variables:
   max_attempts: !input max_attempts
   slow_retry_minutes: !input slow_retry_minutes
   startup_safety: !input startup_safety
+  notify_services: !input notify_services
 
 triggers:
   - trigger: state
@@ -128,6 +140,11 @@ actions:
       # Only act when every internet check is offline.
       - condition: template
         value_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}"
+
+      # The outage started when the first sensor went offline.
+      - variables:
+          outage_start_ts: >-
+            {{ expand(sensors) | map(attribute='last_changed') | map('as_timestamp') | min }}
 
       # Quick attempts, one recovery time apart.
       - repeat:
@@ -195,3 +212,33 @@ actions:
                     - action: switch.turn_on
                       target:
                         entity_id: !input plug
+
+      # Internet is back: log it and tell the phones how long it was out.
+      - if:
+          - condition: template
+            value_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}"
+        then:
+          - variables:
+              outage_minutes: >-
+                {{ ((as_timestamp(now()) - (outage_start_ts | float)) / 60) | round(0) | int }}
+          - variables:
+              outage_text: >-
+                {% set m = outage_minutes | int %}
+                {% if m >= 60 %}{{ m // 60 }} h {{ m % 60 }} min{% else %}{{ m }} min{% endif %}
+          - action: logbook.log
+            data:
+              name: Internet watchdog
+              message: "Internet restored after about {{ outage_text }}"
+              entity_id: "{{ plug_entity }}"
+          - repeat:
+              for_each: "{{ notify_services }}"
+              sequence:
+                - action: >-
+                    {{ repeat.item | trim if (repeat.item | trim).startswith('notify.')
+                       else 'notify.' ~ (repeat.item | trim) }}
+                  continue_on_error: true
+                  data:
+                    title: Internet restored
+                    message: >-
+                      The internet is back after about {{ outage_text }} offline. The watchdog
+                      restarted the modem during the outage.
