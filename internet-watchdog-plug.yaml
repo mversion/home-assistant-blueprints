@@ -89,17 +89,18 @@ blueprint:
       default: true
       selector:
         boolean: {}
-    notify_services:
+    notify_devices:
       name: Notify when the internet is back
       description: >
-        Notification actions to send an "internet restored" message to after an outage the
-        watchdog acted on, for example notify.mobile_app_karels_phone (needs the Home Assistant
-        Companion app on the phone). Find the name under Developer tools > Actions by searching
-        "mobile_app". Add one per phone, or leave empty for no notifications.
+        Phones or tablets to send an "Internet restored" notification to after an outage the
+        watchdog acted on. Only devices with the Home Assistant Companion app signed in to this
+        Home Assistant are listed. Leave empty for no notifications.
       default: []
       selector:
-        text:
+        device:
           multiple: true
+          filter:
+            - integration: mobile_app
 
 mode: single
 max_exceeded: silent
@@ -112,7 +113,7 @@ variables:
   max_attempts: !input max_attempts
   slow_retry_minutes: !input slow_retry_minutes
   startup_safety: !input startup_safety
-  notify_services: !input notify_services
+  notify_devices: !input notify_devices
 
 triggers:
   - trigger: state
@@ -225,6 +226,17 @@ actions:
               outage_text: >-
                 {% set m = outage_minutes | int %}
                 {% if m >= 60 %}{{ m // 60 }} h {{ m % 60 }} min{% else %}{{ m }} min{% endif %}
+          # The Companion app's notify action is named after the device it registered as,
+          # e.g. "Karel's Pixel" -> notify.mobile_app_karels_pixel.
+          - variables:
+              notify_services: >-
+                {% set ns = namespace(out=[]) %}
+                {% set devs = notify_devices or [] %}
+                {% for d in ([devs] if devs is string else devs) %}
+                  {% set n = device_attr(d, 'name') %}
+                  {% if n %}{% set ns.out = ns.out + ['notify.mobile_app_' ~ (n | slugify)] %}{% endif %}
+                {% endfor %}
+                {{ ns.out }}
           - action: logbook.log
             data:
               name: Internet watchdog
@@ -233,9 +245,7 @@ actions:
           - repeat:
               for_each: "{{ notify_services }}"
               sequence:
-                - action: >-
-                    {{ repeat.item | trim if (repeat.item | trim).startswith('notify.')
-                       else 'notify.' ~ (repeat.item | trim) }}
+                - action: "{{ repeat.item }}"
                   continue_on_error: true
                   data:
                     title: Internet restored
