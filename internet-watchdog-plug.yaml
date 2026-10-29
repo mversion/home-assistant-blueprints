@@ -1,0 +1,122 @@
+blueprint:
+  name: Internet watchdog - power-cycle the modem plug
+  description: >
+    When Home Assistant can't reach the internet for a while, turns the plug that powers the
+    modem/router off, waits, and turns it back on. If the internet still isn't back after the
+    recovery time, it tries again, up to the maximum number of attempts.
+
+
+    Needs one or more **Ping** binary sensors (Settings > Devices & services > Add integration >
+    Ping), for example 1.1.1.1 and 8.8.8.8. The plug is only cycled when **all** of them are
+    offline, so one unreachable server doesn't restart the modem.
+
+
+    The plug must power the modem/router only, never the Home Assistant box itself.
+  domain: automation
+  author: mversion
+  source_url: https://github.com/mversion/home-assistant-blueprints/blob/main/internet-watchdog-plug.yaml
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    internet_sensors:
+      name: Internet check sensors
+      description: Ping binary sensors (on = reachable). Pick at least two.
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
+    plug:
+      name: Modem plug
+      description: The smart plug the modem/router is plugged into (e.g. IKEA INSPELNING).
+      selector:
+        entity:
+          domain: switch
+    offline_minutes:
+      name: Offline for
+      description: How long all sensors must be offline before the plug is cycled.
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 30
+          unit_of_measurement: minutes
+    off_seconds:
+      name: Off time
+      description: How long the plug stays off.
+      default: 15
+      selector:
+        number:
+          min: 5
+          max: 120
+          unit_of_measurement: seconds
+    recovery_minutes:
+      name: Recovery time
+      description: >
+        How long to wait for the internet to come back after switching on, before trying again.
+        Modems usually need 3 to 5 minutes to reconnect.
+      default: 10
+      selector:
+        number:
+          min: 2
+          max: 60
+          unit_of_measurement: minutes
+    max_attempts:
+      name: Maximum attempts
+      description: Stop after this many power cycles in a row, so a real outage doesn't loop forever.
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+
+mode: single
+max_exceeded: silent
+
+variables:
+  sensors: !input internet_sensors
+  plug_entity: !input plug
+  off_seconds: !input off_seconds
+  recovery_minutes: !input recovery_minutes
+  max_attempts: !input max_attempts
+
+triggers:
+  - trigger: state
+    entity_id: !input internet_sensors
+    to: "off"
+    for:
+      minutes: !input offline_minutes
+
+conditions:
+  - condition: template
+    value_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}"
+
+actions:
+  - repeat:
+      sequence:
+        - action: logbook.log
+          data:
+            name: Internet watchdog
+            message: >-
+              Internet unreachable - power-cycling {{ plug_entity }}
+              (attempt {{ repeat.index }} of {{ max_attempts | int }})
+            entity_id: "{{ plug_entity }}"
+        - action: switch.turn_off
+          target:
+            entity_id: !input plug
+        - delay:
+            seconds: "{{ off_seconds | int }}"
+        - action: switch.turn_on
+          target:
+            entity_id: !input plug
+        - wait_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}"
+          timeout: "{{ (recovery_minutes | int) * 60 }}"
+          continue_on_timeout: true
+      until:
+        - condition: template
+          value_template: >-
+            {{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0
+               or repeat.index >= (max_attempts | int) }}
+  # Safety net: never leave the modem switched off.
+  - action: switch.turn_on
+    target:
+      entity_id: !input plug
