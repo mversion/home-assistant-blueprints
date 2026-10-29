@@ -14,8 +14,8 @@ the internet stays down. It also turns the plug on when Home Assistant starts (c
 modem is never left off if Home Assistant restarted in the middle of a power cycle.
 
 When the internet comes back after an outage it acted on, it can send an **Internet restored** notification
-with how long the outage lasted to one or more phones (Home Assistant Companion app, for example
-`notify.mobile_app_karels_phone`). Leave the setting empty for no notifications.
+with how long the outage lasted. Pick the phones from a list of devices that have the Home Assistant
+Companion app signed in. Leave it empty for no notifications.
 
 **Needs:**
 
