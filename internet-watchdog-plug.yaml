@@ -3,7 +3,8 @@ blueprint:
   description: >
     When Home Assistant can't reach the internet for a while, turns the plug that powers the
     modem/router off, waits, and turns it back on. If the internet still isn't back after the
-    recovery time, it tries again, up to the maximum number of attempts.
+    recovery time, it tries again, up to the maximum number of quick attempts. After that it can
+    keep trying slowly (for example once an hour) for as long as the internet stays down.
 
 
     Needs one or more **Ping** binary sensors (Settings > Devices & services > Add integration >
@@ -11,7 +12,8 @@ blueprint:
     offline, so one unreachable server doesn't restart the modem.
 
 
-    The plug must power the modem/router only, never the Home Assistant box itself.
+    The plug must power the modem/router only, never the Home Assistant box itself. Set the
+    plug's power-on behaviour to **Previous** (not On).
   domain: automation
   author: mversion
   source_url: https://github.com/mversion/home-assistant-blueprints/blob/main/internet-watchdog-plug.yaml
@@ -61,13 +63,32 @@ blueprint:
           max: 60
           unit_of_measurement: minutes
     max_attempts:
-      name: Maximum attempts
-      description: Stop after this many power cycles in a row, so a real outage doesn't loop forever.
+      name: Quick attempts
+      description: How many power cycles to try in a row, one recovery time apart.
       default: 3
       selector:
         number:
           min: 1
           max: 10
+    slow_retry_minutes:
+      name: Slow retry every
+      description: >
+        After the quick attempts, keep power-cycling at this interval for as long as the internet
+        stays down. Set to 0 to turn slow retries off.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: minutes
+    startup_safety:
+      name: Turn the plug on when Home Assistant starts
+      description: >
+        Makes sure the modem is never left off, for example if Home Assistant restarted in the
+        middle of a power cycle. If the plug is already on, nothing changes.
+      default: true
+      selector:
+        boolean: {}
 
 mode: single
 max_exceeded: silent
@@ -78,45 +99,99 @@ variables:
   off_seconds: !input off_seconds
   recovery_minutes: !input recovery_minutes
   max_attempts: !input max_attempts
+  slow_retry_minutes: !input slow_retry_minutes
+  startup_safety: !input startup_safety
 
 triggers:
   - trigger: state
+    id: offline
     entity_id: !input internet_sensors
     to: "off"
     for:
       minutes: !input offline_minutes
-
-conditions:
-  - condition: template
-    value_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}"
+  - trigger: homeassistant
+    id: startup
+    event: start
 
 actions:
-  - repeat:
-      sequence:
-        - action: logbook.log
-          data:
-            name: Internet watchdog
-            message: >-
-              Internet unreachable - power-cycling {{ plug_entity }}
-              (attempt {{ repeat.index }} of {{ max_attempts | int }})
-            entity_id: "{{ plug_entity }}"
-        - action: switch.turn_off
-          target:
-            entity_id: !input plug
-        - delay:
-            seconds: "{{ off_seconds | int }}"
-        - action: switch.turn_on
-          target:
-            entity_id: !input plug
-        - wait_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}"
-          timeout: "{{ (recovery_minutes | int) * 60 }}"
-          continue_on_timeout: true
-      until:
-        - condition: template
-          value_template: >-
-            {{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0
-               or repeat.index >= (max_attempts | int) }}
-  # Safety net: never leave the modem switched off.
-  - action: switch.turn_on
-    target:
-      entity_id: !input plug
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: startup
+        sequence:
+          - condition: template
+            value_template: "{{ startup_safety }}"
+          - action: switch.turn_on
+            target:
+              entity_id: !input plug
+    default:
+      # Only act when every internet check is offline.
+      - condition: template
+        value_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}"
+
+      # Quick attempts, one recovery time apart.
+      - repeat:
+          sequence:
+            - action: logbook.log
+              data:
+                name: Internet watchdog
+                message: >-
+                  Internet unreachable - power-cycling {{ plug_entity }}
+                  (attempt {{ repeat.index }} of {{ max_attempts | int }})
+                entity_id: "{{ plug_entity }}"
+            - action: switch.turn_off
+              target:
+                entity_id: !input plug
+            - delay:
+                seconds: "{{ off_seconds | int }}"
+            - action: switch.turn_on
+              target:
+                entity_id: !input plug
+            - wait_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}"
+              timeout: "{{ (recovery_minutes | int) * 60 }}"
+              continue_on_timeout: true
+          until:
+            - condition: template
+              value_template: >-
+                {{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0
+                   or repeat.index >= (max_attempts | int) }}
+
+      # Safety net: never leave the modem switched off.
+      - action: switch.turn_on
+        target:
+          entity_id: !input plug
+
+      # Slow retries for as long as the internet stays down.
+      - if:
+          - condition: template
+            value_template: >-
+              {{ (slow_retry_minutes | int) > 0
+                 and expand(sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}
+        then:
+          - repeat:
+              while:
+                - condition: template
+                  value_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}"
+              sequence:
+                - wait_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count > 0 }}"
+                  timeout: "{{ (slow_retry_minutes | int) * 60 }}"
+                  continue_on_timeout: true
+                - if:
+                    - condition: template
+                      value_template: "{{ expand(sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}"
+                  then:
+                    - action: logbook.log
+                      data:
+                        name: Internet watchdog
+                        message: >-
+                          Internet still unreachable - slow retry, power-cycling {{ plug_entity }}
+                          (every {{ slow_retry_minutes | int }} min)
+                        entity_id: "{{ plug_entity }}"
+                    - action: switch.turn_off
+                      target:
+                        entity_id: !input plug
+                    - delay:
+                        seconds: "{{ off_seconds | int }}"
+                    - action: switch.turn_on
+                      target:
+                        entity_id: !input plug

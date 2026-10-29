@@ -7,7 +7,11 @@
 When Home Assistant can't reach the internet for a set time (default 2 minutes), it turns off the
 smart plug powering the modem/router, waits (default 15 seconds) and turns it back on. If the
 internet isn't back within the recovery time (default 10 minutes) it tries again, up to a maximum
-number of attempts (default 3), and always leaves the plug on at the end.
+number of quick attempts (default 3), and always leaves the plug on at the end.
+
+After the quick attempts it can keep trying slowly (default once every 60 minutes, 0 = off) for as long as
+the internet stays down. It also turns the plug on when Home Assistant starts (can be switched off), so the
+modem is never left off if Home Assistant restarted in the middle of a power cycle.
 
 **Needs:**
 
