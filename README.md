@@ -19,7 +19,10 @@ number of attempts (default 3), and always leaves the plug on at the end.
 **Two rules:**
 
 - The plug must power the modem only, never the Home Assistant box.
-- Set the plug's power-on behaviour to **On**, so a power cut doesn't leave the modem off.
+- Set the plug's power-on behaviour to **Previous**, so it comes back on after a power cut.
+  Avoid **On**: an IKEA INSPELNING set to On restarted itself as it switched off and came straight
+  back on, so the modem never lost power. Avoid **Toggle** too, because a power cut would leave the
+  modem off.
 
 **Manual import:** Settings → Automations & scenes → Blueprints → Import blueprint, and paste:
 
